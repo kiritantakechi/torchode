@@ -1,11 +1,9 @@
-from enum import Enum
+from enum import IntEnum
 
-# Despite TorchScript's purported support of enums, the JIT compiler raises some
-# unintelligible errors when confronted with them, because it tries to compile some Enum
-# method that it does not support. To be save, we avoid the enum below in any internal
-# code that might be JIT compiled and work with these constant integer values directly.
-# The enum remains as a more user-friendly alternative that can, for example, give you
-# the name of an error code.
+# The internal solver code works with these plain integer constants directly because they
+# are convenient as scalar arguments to tensor operations such as `torch.where`. The
+# `Status` enum below mirrors them as a more user-friendly, public alternative that can,
+# for example, give you the name of an error code.
 SUCCESS = 0
 GENERAL_ERROR = 1
 REACHED_DT_MIN = 2
@@ -13,14 +11,10 @@ REACHED_MAX_STEPS = 3
 INFINITE_NORM = 4
 
 
-class Status(Enum):
+class Status(IntEnum):
     """A joint collection of all possible solver and step size controller status codes.
 
-    Any status greater than 0, i.e. `Status.SUCCESS`, signifies some type of abnormal
-    condition.
-
-    This is an Enum instead of an IntEnum, because TorchScript only accepts Enums as of
-    pytorch 1.11.
+    Any status other than `Status.SUCCESS` signifies some type of abnormal condition.
     """
 
     SUCCESS = SUCCESS

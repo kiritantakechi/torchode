@@ -1,5 +1,3 @@
-from typing import Optional
-
 import sympy as sp
 import torch
 
@@ -34,7 +32,7 @@ def compute_interpolation_weights():
         2.5 * (t - 1) * (t - 0.6) * t**2
     ]
     # fmt: on
-    interpolant = y0 + dt * sum(f_i * b_i for f_i, b_i in zip(f, b))
+    interpolant = y0 + dt * sum(f_i * b_i for f_i, b_i in zip(f, b, strict=True))
     # Fully expand the polynomial and collect the powers of t
     form = sp.collect(sp.expand(interpolant, t), t)
     # The coefficients of t^2, t^3 and t^4 are of the form
@@ -74,15 +72,31 @@ class Tsit5(ExplicitRungeKutta):
     TABLEAU = ButcherTableau.from_lists(
         c=[0.0, 0.161, 0.327, 0.9, 0.9800255409045097, 1.0, 1.0],
         a=[
-            # fmt: off
             [],
             [0.161],
             [-0.008480655492356989, 0.335480655492357],
             [2.8971530571054935, -6.359448489975075, 4.3622954328695815],
-            [5.325864828439257, -11.748883564062828, 7.4955393428898365, -0.09249506636175525],
-            [5.86145544294642, -12.92096931784711, 8.159367898576159, -0.071584973281401, -0.02826905039406838],
-            [0.09646076681806523, 0.01, 0.4798896504144996, 1.379008574103742, -3.290069515436081, 2.324710524099774],
-            # fmt: on
+            [
+                5.325864828439257,
+                -11.748883564062828,
+                7.4955393428898365,
+                -0.09249506636175525,
+            ],
+            [
+                5.86145544294642,
+                -12.92096931784711,
+                8.159367898576159,
+                -0.071584973281401,
+                -0.02826905039406838,
+            ],
+            [
+                0.09646076681806523,
+                0.01,
+                0.4798896504144996,
+                1.379008574103742,
+                -3.290069515436081,
+                2.324710524099774,
+            ],
         ],
         b=[
             0.09646076681806523,
@@ -113,14 +127,12 @@ class Tsit5(ExplicitRungeKutta):
         b_other=compute_interpolation_weights(),
     )
 
-    def __init__(self, term: Optional[ODETerm] = None):
+    def __init__(self, term: ODETerm | None = None):
         super().__init__(term, Tsit5.TABLEAU)
 
-    @torch.jit.export
     def convergence_order(self):
         return 5
 
-    @torch.jit.export
     def build_interpolation(self, data: ERKInterpolationData):
         y0 = data.y0
         dt = data.dt.to(dtype=y0.dtype)

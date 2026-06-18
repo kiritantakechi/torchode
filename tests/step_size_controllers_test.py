@@ -1,14 +1,14 @@
-from unittest.mock import Mock
-
 import pytest
 import torch
 
 from torchode import (
+    AutoDiffAdjoint,
     InitialValueProblem,
     IntegralController,
     ODETerm,
     PIDController,
     Status,
+    Tsit5,
 )
 from torchode.single_step_methods import StepResult
 from torchode.step_size_controllers import PIDState, max_norm, rms_norm
@@ -130,7 +130,6 @@ def test_nan_y_signals_error_status(controller):
     ],
 )
 def test_accepts_step_if_error_small(controller):
-    dt_min = torch.tensor(0.5)
     t0 = torch.tensor([0.0, 1.5])
     dt = torch.tensor([1.0, 0.5])
     y0 = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
@@ -207,7 +206,6 @@ def test_sets_status_on_dt_min(controller):
 
 
 def test_pid_does_not_update_state_if_step_is_rejected():
-    dt_min = torch.tensor(0.5)
     t0 = torch.tensor([0.0, 2.5])
     dt = torch.tensor([1.0, 1.0])
     y0 = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
@@ -261,11 +259,43 @@ def test_limit_step_size(controller):
     state = controller.initial_state(
         method_order=5, problem=problem, dt_min=None, dt_max=None
     )
-    _, dt_next_no_limit, _, _ = controller.adapt_step_size(t0, dt, y0, result, state, stats={})
+    _, dt_next_no_limit, _, _ = controller.adapt_step_size(
+        t0, dt, y0, result, state, stats={}
+    )
     assert (dt_next_no_limit > dt_max).any()
 
     state = controller.initial_state(
         method_order=5, problem=problem, dt_min=None, dt_max=dt_max
     )
-    _, dt_next_limited, _, _ = controller.adapt_step_size(t0, dt, y0, result, state, stats={})
+    _, dt_next_limited, _, _ = controller.adapt_step_size(
+        t0, dt, y0, result, state, stats={}
+    )
     assert (dt_next_limited <= dt_max).all()
+
+
+@pytest.mark.parametrize(
+    "controller",
+    [
+        PIDController(atol=1e-6, rtol=1e-6, pcoeff=0.2, icoeff=0.5, dcoeff=0.0),
+        IntegralController(atol=1e-6, rtol=1e-6),
+    ],
+)
+def test_zero_length_interval_does_not_produce_nan(controller):
+    # Regression test: selecting the initial step for a zero-length integration
+    # interval must not divide by zero and produce NaNs (see #45).
+    def f(t, y):
+        return -0.5 * y
+
+    term = ODETerm(f)
+    y0 = torch.tensor([[1.2, 0.3]])
+    t_eval = torch.tensor([[1.0, 1.0, 1.0]])
+    problem = InitialValueProblem(
+        y0, t_start=t_eval[:, 0], t_end=t_eval[:, -1], t_eval=t_eval
+    )
+
+    solution = AutoDiffAdjoint(Tsit5(term=term), controller).solve(problem, term)
+
+    assert not torch.isnan(solution.ys).any()
+    # The solution does not evolve over a zero-length interval, so it stays at y0
+    assert torch.allclose(solution.ys, y0[:, None, :].expand(-1, 3, -1))
+    assert (solution.status == Status.SUCCESS).all()

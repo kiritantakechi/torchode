@@ -1,31 +1,21 @@
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple
 
 import torch
 import torch.nn as nn
-from torchtyping import TensorType
+from jaxtyping import Float
+from torch import Tensor
 
 from ..interpolation import LocalInterpolation
 from ..problems import InitialValueProblem
-from ..status_codes import Status
 from ..terms import ODETerm
-from ..typing import *
+from ..typing import AcceptTensor, DataTensor, StatusTensor, TimeTensor
 from .base import StepResult
 
-
-class CoefficientVector(TensorType["nodes"]):
-    pass
-
-
-class RungeKuttaMatrix(TensorType["nodes", "weights"]):
-    pass
-
-
-class WeightVector(TensorType["weights"]):
-    pass
-
-
-class WeightMatrix(TensorType["rows", "weights"]):
-    pass
+# Shape-documenting aliases for the Butcher tableau tensors (see ``torchode.typing``).
+CoefficientVector = Float[Tensor, "nodes"]
+RungeKuttaMatrix = Float[Tensor, "nodes weights"]
+WeightVector = Float[Tensor, "weights"]
+WeightMatrix = Float[Tensor, "rows weights"]
 
 
 class ButcherTableau:
@@ -40,9 +30,9 @@ class ButcherTableau:
         # Coefficients for the error estimate
         b_err: WeightVector,
         # Additional additional rows of the b matrix
-        b_other: Optional[WeightMatrix] = None,
-        fsal: Optional[bool] = None,
-        ssal: Optional[bool] = None,
+        b_other: WeightMatrix | None = None,
+        fsal: bool | None = None,
+        ssal: bool | None = None,
     ):
         self.c = c
         self.a = a
@@ -60,12 +50,12 @@ class ButcherTableau:
     @staticmethod
     def from_lists(
         *,
-        c: List[float],
-        a: List[List[float]],
-        b: List[float],
-        b_err: Optional[List[float]] = None,
-        b_low_order: Optional[List[float]] = None,
-        b_other: Optional[List[List[float]]] = None,
+        c: list[float],
+        a: list[list[float]],
+        b: list[float],
+        b_err: list[float] | None = None,
+        b_low_order: list[float] | None = None,
+        b_other: list[list[float]] | None = None,
     ):
         assert b_err is not None or b_low_order is not None, (
             "You have to provide either the weights for the error approximation"
@@ -106,7 +96,7 @@ class ButcherTableau:
 
     def to(
         self, device: torch.device, time_dtype: torch.dtype, data_dtype: torch.dtype
-    ) -> "ButcherTableau":
+    ) -> ButcherTableau:
         b_other = self.b_other
         if b_other is not None:
             b_other = b_other.to(device, data_dtype)
@@ -169,35 +159,31 @@ class ERKInterpolationData(NamedTuple):
 
 class ERKState(NamedTuple):
     tableau: ButcherTableau
-    prev_vf1: Optional[DataTensor]
+    prev_vf1: DataTensor | None
 
 
 class ExplicitRungeKutta(nn.Module):
-    def __init__(self, term: Optional[ODETerm], tableau: ButcherTableau):
+    def __init__(self, term: ODETerm | None, tableau: ButcherTableau):
         super().__init__()
 
         self.term = term
         self.tableau = tableau
 
-    @torch.jit.export
     def init(
         self,
-        term: Optional[ODETerm],
+        term: ODETerm | None,
         problem: InitialValueProblem,
-        f0: Optional[DataTensor],
+        f0: DataTensor | None,
         *,
-        stats: Dict[str, Any],
+        stats: dict[str, Any],
         args: Any,
     ) -> ERKState:
         if self.tableau.fsal:
-            term_ = term
-            if torch.jit.is_scripting() or term_ is None:
-                assert term is None, "The integration term is fixed for JIT compilation"
-                term_ = self.term
-            assert term_ is not None
+            term = term if term is not None else self.term
+            assert term is not None
 
             if f0 is None:
-                prev_vf1 = term_.vf(problem.t_start, problem.y0, stats, args)
+                prev_vf1 = term.vf(problem.t_start, problem.y0, stats, args)
             else:
                 prev_vf1 = f0
         else:
@@ -212,7 +198,6 @@ class ExplicitRungeKutta(nn.Module):
             prev_vf1=prev_vf1,
         )
 
-    @torch.jit.export
     def merge_states(self, accept: AcceptTensor, current: ERKState, previous: ERKState):
         prev_vf1 = previous.prev_vf1
         current_vf1 = current.prev_vf1
@@ -223,24 +208,20 @@ class ExplicitRungeKutta(nn.Module):
                 current.tableau, torch.where(accept[:, None], current_vf1, prev_vf1)
             )
 
-    @torch.jit.export
     def step(
         self,
-        term: Optional[ODETerm],
+        term: ODETerm | None,
         running: AcceptTensor,
         y0: DataTensor,
         t0: TimeTensor,
         dt: TimeTensor,
         state: ERKState,
         *,
-        stats: Dict[str, Any],
+        stats: dict[str, Any],
         args: Any,
-    ) -> Tuple[StepResult, ERKInterpolationData, ERKState, Optional[StatusTensor]]:
-        term_ = term
-        if torch.jit.is_scripting() or term_ is None:
-            assert term is None, "The integration term is fixed for JIT compilation"
-            term_ = self.term
-        assert term_ is not None
+    ) -> tuple[StepResult, ERKInterpolationData, ERKState, StatusTensor | None]:
+        term = term if term is not None else self.term
+        assert term is not None
         tableau = state.tableau
 
         # Convert dt into the data dtype for dtype stability
@@ -250,7 +231,7 @@ class ExplicitRungeKutta(nn.Module):
         vf0 = (
             prev_vf1
             if tableau.fsal and prev_vf1 is not None
-            else term_.vf(t0, y0, stats, args)
+            else term.vf(t0, y0, stats, args)
         )
         y_i = y0
         k = vf0.new_empty((tableau.n_stages, vf0.shape[0], vf0.shape[1]))
@@ -260,7 +241,7 @@ class ExplicitRungeKutta(nn.Module):
         for i in range(1, tableau.n_stages):
             y_i = torch.einsum("j, jbf -> bf", a[i, :i], k[:i])
             y_i = torch.addcmul(y0, dt_data[:, None], y_i)
-            k[i] = term_.vf(t_nodes[i], y_i, stats, args)
+            k[i] = term.vf(t_nodes[i], y_i, stats, args)
 
         if tableau.ssal:
             y1 = y_i

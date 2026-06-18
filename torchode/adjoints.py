@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -9,15 +9,15 @@ from .single_step_methods import SingleStepMethod
 from .solution import Solution
 from .step_size_controllers import StepSizeController
 from .terms import ODETerm
-from .typing import *
+from .typing import DataTensor, TimeTensor
 
 
 class Adjoint:
     def solve(
         self,
         problem: InitialValueProblem,
-        term: Optional[ODETerm] = None,
-        dt0: Optional[TimeTensor] = None,
+        term: ODETerm | None = None,
+        dt0: TimeTensor | None = None,
         args: Any = None,
     ) -> Solution:
         raise NotImplementedError()
@@ -29,7 +29,7 @@ class AutoDiffAdjoint(nn.Module):
         step_method: SingleStepMethod,
         step_size_controller: StepSizeController,
         *,
-        max_steps: Optional[int] = None,
+        max_steps: int | None = None,
         backprop_through_step_size_control: bool = True,
     ):
         super().__init__()
@@ -39,12 +39,11 @@ class AutoDiffAdjoint(nn.Module):
         self.max_steps = max_steps
         self.backprop_through_step_size_control = backprop_through_step_size_control
 
-    @torch.jit.export
     def solve(
         self,
         problem: InitialValueProblem,
-        term: Optional[ODETerm] = None,
-        dt0: Optional[TimeTensor] = None,
+        term: ODETerm | None = None,
+        dt0: TimeTensor | None = None,
         args: Any = None,
     ) -> Solution:
         step_method, step_size_controller = self.step_method, self.step_size_controller
@@ -60,15 +59,14 @@ class AutoDiffAdjoint(nn.Module):
         y = problem.y0
         stats_n_steps = y.new_zeros(batch_size, dtype=torch.long)
         stats_n_accepted = y.new_zeros(batch_size, dtype=torch.long)
-        stats: Dict[str, Any] = {}
+        stats: dict[str, Any] = {}
 
         # Compute the boundaries in time to ensure that we never step outside of them
         t_min = torch.minimum(t_start, t_end)
         t_max = torch.maximum(t_end, t_start)
 
-        # TorchScript is not smart enough yet to figure out that we only access these
-        # variables when they have been defined, so we have to always define them and
-        # intialize them to any valid tensor.
+        # Pre-define these so that they are always bound. They are only populated and
+        # read when `t_eval` is not None.
         y_eval: torch.Tensor = y
         not_yet_evaluated: torch.Tensor = y
         minus_t_eval_normalized: torch.Tensor = y
@@ -91,10 +89,7 @@ class AutoDiffAdjoint(nn.Module):
         running = y.new_ones(batch_size, dtype=torch.bool)
 
         # Initialize additional statistics to track for the integration term
-        term_ = term
-        if torch.jit.is_scripting() or term is None:
-            assert term is None, "The integration term is fixed for JIT compilation"
-            term_ = self.step_method.term
+        term_ = term if term is not None else self.step_method.term
         assert term_ is not None
         term_.init(problem, stats)
 
@@ -108,7 +103,7 @@ class AutoDiffAdjoint(nn.Module):
         # Ensure that the initial dt does not step outside of the time domain
         dt = torch.clamp(dt, t_min - t, t_max - t)
 
-        # TorchScript does not support set_grad_enabled, so we detach manually
+        # Detach so that we do not backpropagate through the step size control
         if not self.backprop_through_step_size_control:
             dt = dt.detach()
 
@@ -142,7 +137,7 @@ class AutoDiffAdjoint(nn.Module):
             )
             accept, dt_next, controller_state_next, controller_status = controller_out
 
-            # TorchScript does not support set_grad_enabled, so we detach manually
+            # Detach so that we do not backpropagate through the step size control
             if not self.backprop_through_step_size_control:
                 dt_next = dt_next.detach()
 
@@ -207,8 +202,8 @@ class AutoDiffAdjoint(nn.Module):
             # Evaluate the solution at all evaluation points that have been passed in
             # this step.
             #
-            # This causes a blocking CPU-GPU sync point at to_be_evaluated.any 
-            # when t_eval is not None, but deferring this sync doesn't seem to 
+            # This causes a blocking CPU-GPU sync point at to_be_evaluated.any
+            # when t_eval is not None, but deferring this sync doesn't seem to
             # yield a speedup. A sync is necessary at each evaluation point anyway
             # since nonzero produces a variable-shape result.
             # See https://github.com/martenlienen/torchode/issues/46
@@ -269,15 +264,12 @@ class AutoDiffAdjoint(nn.Module):
                     status_codes.SUCCESS, dtype=torch.long, device=device
                 ).expand(batch_size)
 
-            # Put the step statistics into the stats dict in the end, so that
-            # we don't have to type-assert all the time in torchscript
+            # Put the step statistics into the stats dict at the end
             stats["n_steps"] = stats_n_steps
             stats["n_accepted"] = stats_n_accepted
 
-            # The finalization scope is in the scope of the while loop so that the
-            # `t_eval is None` case can access the `interp_data` in TorchScript.
-            # Declaring `interp_data` outside of the loop does not work because its type
-            # depends on the step method.
+            # The finalization happens inside the while loop so that the
+            # `t_eval is None` case can access the `interp_data` of the last step.
 
             if t_eval is not None:
                 # Report the number of evaluation steps that have been initialized with
@@ -308,7 +300,7 @@ class AutoDiffAdjoint(nn.Module):
                     ts=t_end[:, None], ys=y_end[:, None], stats=stats, status=status
                 )
 
-        assert False, "unreachable"
+        raise AssertionError("unreachable")
 
     def __repr__(self):
         return (
@@ -335,7 +327,9 @@ def unflatten_tensors(shapes, tensors):
     return [
         tensor.reshape((-1, *shape))
         for shape, tensor in zip(
-            shapes, torch.split(tensors, [prod(shape) for shape in shapes], dim=1)
+            shapes,
+            torch.split(tensors, [prod(shape) for shape in shapes], dim=1),
+            strict=True,
         )
     ]
 
@@ -413,9 +407,7 @@ class BacksolveFunction(torch.autograd.Function):
                     )
                     aug_state = solution.ys[:, -1]
                     aug_state[:, 1 : 1 + n_features] = ys[:, i - 1]
-                    aug_state[:, 1 + n_features : 1 + 2 * n_features] += grad_ys[
-                        :, i - 1
-                    ]
+                    aug_state[:, 1 + n_features : 1 + 2 * n_features] += grad_ys[:, i - 1]
 
                     stats["backsolve"].append(solution.stats)
 
@@ -459,7 +451,7 @@ class AugmentedDynamicsTerm(nn.Module):
                 args = (t_, y_)
                 if self.term.with_args:
                     args = args + (arg_i,)
-                params_dict = {name: value for name, value in zip(params_names, params)}
+                params_dict = dict(zip(params_names, params, strict=True))
                 return torch.func.functional_call(f, (params_dict, buffers), args)
 
             dy, vjp = torch.func.vjp(wrapper, tuple(orig_params.values()), t_i, y_i)
@@ -472,11 +464,11 @@ class AugmentedDynamicsTerm(nn.Module):
             randomness=self.vmap_randomness,
         )
 
-    def init(self, problem: InitialValueProblem, stats: Dict[str, Any]):
+    def init(self, problem: InitialValueProblem, stats: dict[str, Any]):
         return self.term.init(problem, stats)
 
     def vf(
-        self, t: TimeTensor, y: DataTensor, stats: Dict[str, Any], args: Any
+        self, t: TimeTensor, y: DataTensor, stats: dict[str, Any], args: Any
     ) -> DataTensor:
         shapes, args = args
 
@@ -507,10 +499,10 @@ class BacksolveAdjoint(nn.Module):
     def solve(
         self,
         problem: InitialValueProblem,
-        term: Optional[ODETerm] = None,
-        dt0: Optional[TimeTensor] = None,
+        term: ODETerm | None = None,
+        dt0: TimeTensor | None = None,
         args: Any = None,
-        backward_dt0: Optional[TimeTensor] = None,
+        backward_dt0: TimeTensor | None = None,
     ) -> Solution:
         if backward_dt0 is None and dt0 is not None:
             backward_dt0 = -dt0
@@ -545,11 +537,11 @@ class UnwrappingODETerm(nn.Module):
 
         self.term = term
 
-    def init(self, problem: InitialValueProblem, stats: Dict[str, Any]):
+    def init(self, problem: InitialValueProblem, stats: dict[str, Any]):
         return self.term.init(problem, stats)
 
     def vf(
-        self, t: TimeTensor, y: DataTensor, stats: Dict[str, Any], args: Any
+        self, t: TimeTensor, y: DataTensor, stats: dict[str, Any], args: Any
     ) -> DataTensor:
         """Evaluate the vector field."""
         batch_size, t_intercept, t_slope, term_args = args
@@ -574,11 +566,11 @@ class JointAugmentedDynamicsTerm(nn.Module):
         self.term = term
         self.parameters = list(self.term.parameters())
 
-    def init(self, problem: InitialValueProblem, stats: Dict[str, Any]):
+    def init(self, problem: InitialValueProblem, stats: dict[str, Any]):
         return self.term.init(problem, stats)
 
     def vf(
-        self, t: TimeTensor, y: DataTensor, stats: Dict[str, Any], args: Any
+        self, t: TimeTensor, y: DataTensor, stats: dict[str, Any], args: Any
     ) -> DataTensor:
         shapes, term_args = args
 
@@ -602,7 +594,7 @@ class JointAugmentedDynamicsTerm(nn.Module):
             vjp_y = torch.zeros_like(y)
         vjp_params = [
             vp if vp is not None else torch.zeros_like(p)
-            for p, vp in zip(self.parameters, vjp_params)
+            for p, vp in zip(self.parameters, vjp_params, strict=True)
         ]
 
         dy_joint = dy.flatten()[None]
@@ -622,10 +614,10 @@ class JointBacksolveAdjoint(nn.Module):
     def solve(
         self,
         problem: InitialValueProblem,
-        term: Optional[ODETerm] = None,
-        dt0: Optional[TimeTensor] = None,
+        term: ODETerm | None = None,
+        dt0: TimeTensor | None = None,
         args: Any = None,
-        backward_dt0: Optional[TimeTensor] = None,
+        backward_dt0: TimeTensor | None = None,
     ) -> Solution:
         y0 = problem.y0.flatten()[None]
         t_start = problem.t_start[:1]

@@ -1,8 +1,14 @@
-from typing import Protocol, Tuple
+from typing import Protocol
 
 import torch
 
-from .typing import *
+from .typing import (
+    DataTensor,
+    InterpDataTensor,
+    InterpTimeTensor,
+    SampleIndexTensor,
+    TimeTensor,
+)
 
 
 def poly3eval(d, c, b, a, t, t0, t1):
@@ -10,7 +16,7 @@ def poly3eval(d, c, b, a, t, t0, t1):
 
     The coefficients a..3 define the polynomial on the interval [0, 1].
     """
-    dt = (t1 - t0)
+    dt = t1 - t0
     dt = torch.where(dt.abs() > 0.0, dt, 1.0)
     x = ((t - t0) / dt)[:, None].to(dtype=a.dtype)
 
@@ -27,9 +33,9 @@ def poly4eval(e, d, c, b, a, t, t0, t1):
 
     The coefficients a..e define the polynomial on the interval [0, 1].
     """
-    dt = (t1 - t0)
+    dt = t1 - t0
     dt = torch.where(dt.abs() > 0.0, dt, 1.0)
-    x = ((t - t0) / (dt))[:, None].to(dtype=a.dtype)
+    x = ((t - t0) / dt)[:, None].to(dtype=a.dtype)
 
     # Evaluate the polynomial with Horner's method
     y = a
@@ -71,7 +77,7 @@ class ThirdOrderPolynomialInterpolation:
         self,
         t0: TimeTensor,
         t1: TimeTensor,
-        coefficients: Tuple[DataTensor, DataTensor, DataTensor, DataTensor],
+        coefficients: tuple[DataTensor, DataTensor, DataTensor, DataTensor],
     ):
         self.t0 = t0
         self.t1 = t1
@@ -129,7 +135,7 @@ class FourthOrderPolynomialInterpolation:
         self,
         t0: TimeTensor,
         t1: TimeTensor,
-        coefficients: Tuple[DataTensor, DataTensor, DataTensor, DataTensor, DataTensor],
+        coefficients: tuple[DataTensor, DataTensor, DataTensor, DataTensor, DataTensor],
     ):
         self.t0 = t0
         self.t1 = t1
@@ -157,12 +163,7 @@ class FourthOrderPolynomialInterpolation:
             .add(y1, alpha=14)
             .add(y_mid, alpha=-32)
         )
-        c = (
-            f1.add(f0, alpha=-4)
-            .add(y0, alpha=-11)
-            .add(y1, alpha=-5)
-            .add(y_mid, alpha=16)
-        )
+        c = f1.add(f0, alpha=-4).add(y0, alpha=-11).add(y1, alpha=-5).add(y_mid, alpha=16)
         d = f0
         e = y0
 

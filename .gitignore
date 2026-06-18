@@ -2,3 +2,9 @@
 __pycache__
 /.benchmarks
 /dist
+
+# Tooling
+/.venv
+/.ruff_cache
+/site
+/.cache

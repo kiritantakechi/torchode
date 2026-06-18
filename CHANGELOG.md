@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- `PIDController` (the default controller) no longer produces NaNs when selecting
+  the initial step size for a zero-length integration interval. The guard added to
+  `IntegralController` in #45 was missing from `PIDController`.
+
+### Changed
+
+- Modernized the project for Python 3.14 and the `uv` toolchain. The minimum
+  supported versions are now Python 3.14, PyTorch 2.12 and SymPy 1.14.
+- Migrated the tensor shape/dtype annotations from the unmaintained `torchtyping`
+  package to [`jaxtyping`](https://github.com/patrick-kidger/jaxtyping).
+- Replaced the `flake8`/`black`/`isort` configuration with `ruff` for linting and
+  formatting.
+- `Status` is now an `IntEnum`, so its members compare equal to the integer status
+  codes returned in `Solution.status`.
+- Switched the development, test and documentation dependencies to PEP 735
+  dependency groups and added a `uv.lock` lock file.
+
+### Removed
+
+- Dropped support for the deprecated `torch.jit` / TorchScript compiler. The
+  solver is compiled with `torch.compile` instead, which removes the
+  `@torch.jit.export` decorators and the `torch.jit.is_scripting()` branches
+  throughout the code.
+
 ## 1.0.0 - 2024-09-22
 
 After almost a year without any bugs found, we mark this as the first stable release!

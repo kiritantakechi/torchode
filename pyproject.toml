@@ -1,46 +1,58 @@
 [build-system]
-requires = ["flit_core ~= 3.7"]
 build-backend = "flit_core.buildapi"
+requires = [ "flit-core>=3.12" ]
 
 [project]
 name = "torchode"
-dynamic = ["version", "description"]
 readme = "README.md"
-requires-python = ">= 3.8"
-license = {file = "LICENSE"}
-authors = [{name = "Marten Lienen", email = "m.lienen@tum.de"}]
+license = "MIT"
+license-files = [ "LICENSE" ]
+authors = [ { name = "Marten Lienen", email = "m.lienen@tum.de" } ]
+requires-python = ">=3.14"
 classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
-  "Programming Language :: Python"
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
 ]
+dynamic = [ "description", "version" ]
 dependencies = [
-  "sympy ~= 1.10",
-  "torch >= 2.0",
-  "torchtyping ~= 0.1.4",
+  "jaxtyping>=0.3",
+  "sympy>=1.14",
+  "torch>=2.12",
 ]
+urls.homepage = "https://github.com/martenlienen/torchode"
 
-[project.optional-dependencies]
-test = ["pytest", "numpy ~= 1.22"]
-benchmark = ["pytest-benchmark"]
+[dependency-groups]
+dev = [
+  "ruff",
+  { include-group = "benchmark" },
+  { include-group = "docs" },
+  { include-group = "test" },
+]
+test = [ "numpy", "pytest" ]
+docs = [ "mkdocs==1.6.1", "mkdocs-jupyter~=0.25", "mkdocs-material" ]
+benchmark = [ "pytest-benchmark" ]
 
-[project.urls]
-homepage = "https://github.com/martenlienen/torchode"
+[tool.flit]
+module.name = "torchode"
+sdist.exclude = [ "tests/" ]
 
-[tool.flit.module]
-name = "torchode"
+[tool.ruff]
+target-version = "py314"
+line-length = 90
+# Documentation notebooks contain pedagogical demo code that is not held to the
+# same import-order and line-length conventions as the library.
+extend-exclude = [ "*.ipynb" ]
+lint.select = [ "B", "E", "F", "I", "UP" ]
+# Short lambdas are a convenient and idiomatic way to define test fixtures.
+lint.per-file-ignores."tests/*" = [ "E731" ]
+# The Tsit5 tableau and interpolation basis are dense numeric tables that are
+# clearer kept on single lines than wrapped to satisfy the line-length limit.
+lint.per-file-ignores."torchode/single_step_methods/tsit5.py" = [ "E501" ]
+lint.isort.known-first-party = [ "torchode" ]
 
-[tool.flit.sdist]
-exclude = ["tests/"]
-
-[tool.black]
-target-version = ["py310"]
-
-[tool.isort]
-known_first_party = ["torchode"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.pytest]
+ini_options.testpaths = [ "tests" ]

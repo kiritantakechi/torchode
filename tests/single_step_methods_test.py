@@ -4,7 +4,6 @@ import torch
 from problems import create_ivp
 
 from torchode.single_step_methods.runge_kutta import ButcherTableau, ExplicitRungeKutta
-from torchode.status_codes import Status
 
 
 class FixedTableauExplicitRungeKutta(ExplicitRungeKutta):

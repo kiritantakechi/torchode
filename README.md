@@ -3,7 +3,7 @@
 ![pytest](https://github.com/martenlienen/torchode/actions/workflows/python-package.yml/badge.svg)
 
 torchode is a suite of single-step ODE solvers such as `dopri5` or `tsit5` that are
-compatible with PyTorch's JIT compiler and parallelized across a batch. JIT compilation
+compatible with `torch.compile` and parallelized across a batch. Compilation
 often gives a performance boost, especially for code with many small operations such as an
 ODE solver, while batch-parallelization means that the solver can take a step of `0.1` for
 one sample and `0.33` for another, depending on each sample's difficulty. This can avoid
@@ -25,12 +25,14 @@ You can get the latest released version from PyPI with
 pip install torchode
 ```
 
-To install a development version, clone the repository and install in editable mode:
+To work on torchode, clone the repository and set up the environment with
+[uv](https://docs.astral.sh/uv/):
 
 ```sh
 git clone https://github.com/martenlienen/torchode
 cd torchode
-pip install -e .
+uv sync
+uv run pytest
 ```
 
 ## Usage

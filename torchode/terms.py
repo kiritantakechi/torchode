@@ -1,9 +1,11 @@
-from typing import Any, Callable, Dict, Final, Optional
+from collections.abc import Callable
+from typing import Any, Final
 
+import torch
 import torch.nn as nn
 
 from .problems import InitialValueProblem
-from .typing import *
+from .typing import DataTensor, TimeTensor
 
 
 class ODETerm(nn.Module):
@@ -38,8 +40,7 @@ class ODETerm(nn.Module):
         self.with_stats = with_stats
         self.with_args = with_args
 
-    @torch.jit.export
-    def init(self, problem: InitialValueProblem, stats: Dict[str, Any]):
+    def init(self, problem: InitialValueProblem, stats: dict[str, Any]):
         if not self.with_stats:
             return
         # There is no reason for these to be on the GPU
@@ -48,14 +49,11 @@ class ODETerm(nn.Module):
         )
 
     def vf(
-        self, t: TimeTensor, y: DataTensor, stats: Dict[str, Any], args: Any
+        self, t: TimeTensor, y: DataTensor, stats: dict[str, Any], args: Any
     ) -> DataTensor:
         """Evaluate the vector field."""
         if self.with_stats:
-            n_f_evals = stats["n_f_evals"]
-            if torch.jit.is_scripting():
-                assert isinstance(n_f_evals, torch.Tensor)
-            n_f_evals.add_(1)
+            stats["n_f_evals"].add_(1)
 
         if self.with_args:
             return self.f(t, y, args)

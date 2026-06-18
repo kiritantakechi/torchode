@@ -1,6 +1,13 @@
-from typing import Optional
+import torch
 
-from .typing import *
+from .typing import (
+    DataTensor,
+    EvaluationTimesTensor,
+    TimeTensor,
+    same_device,
+    same_dtype,
+    same_shape,
+)
 
 
 class InitialValueProblem:
@@ -21,9 +28,9 @@ class InitialValueProblem:
     def __init__(
         self,
         y0: DataTensor,
-        t_start: Optional[TimeTensor] = None,
-        t_end: Optional[TimeTensor] = None,
-        t_eval: Optional[EvaluationTimesTensor] = None,
+        t_start: TimeTensor | None = None,
+        t_end: TimeTensor | None = None,
+        t_eval: EvaluationTimesTensor | None = None,
     ):
         self.y0 = y0
         self.t_eval = t_eval
@@ -38,22 +45,20 @@ class InitialValueProblem:
             t_end = t_eval[:, -1]
         self.t_end = t_end
 
-
         self.time_direction = torch.where(self.t_end > self.t_start, 1, -1)
 
-        if not torch.jit.is_scripting():
-            assert y0.ndim == 2
-            assert self.t_start.ndim == 1
-            assert self.t_end.ndim == 1
-            assert same_dtype(self.t_start, self.t_end)
-            assert same_shape(y0, self.t_start, self.t_end, dim=0)
-            assert same_device(y0, self.t_start, self.t_end)
+        assert y0.ndim == 2
+        assert self.t_start.ndim == 1
+        assert self.t_end.ndim == 1
+        assert same_dtype(self.t_start, self.t_end)
+        assert same_shape(y0, self.t_start, self.t_end, dim=0)
+        assert same_device(y0, self.t_start, self.t_end)
 
-            if t_eval is not None:
-                assert t_eval.ndim == 2
-                assert same_dtype(self.t_start, t_eval)
-                assert same_shape(self.t_start, t_eval, dim=0)
-                assert same_device(self.t_start, t_eval)
+        if t_eval is not None:
+            assert t_eval.ndim == 2
+            assert same_dtype(self.t_start, t_eval)
+            assert same_shape(self.t_start, t_eval, dim=0)
+            assert same_device(self.t_start, t_eval)
 
     @property
     def data_dtype(self):

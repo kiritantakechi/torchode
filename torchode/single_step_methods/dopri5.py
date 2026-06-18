@@ -1,7 +1,3 @@
-from typing import Optional
-
-import torch
-
 from ..interpolation import FourthOrderPolynomialInterpolation
 from ..terms import ODETerm
 from .runge_kutta import ButcherTableau, ERKInterpolationData, ExplicitRungeKutta
@@ -43,14 +39,12 @@ class Dopri5(ExplicitRungeKutta):
         ],
     )
 
-    def __init__(self, term: Optional[ODETerm] = None):
+    def __init__(self, term: ODETerm | None = None):
         super().__init__(term, Dopri5.TABLEAU)
 
-    @torch.jit.export
     def convergence_order(self):
         return 5
 
-    @torch.jit.export
     def build_interpolation(self, data: ERKInterpolationData):
         b_other = data.tableau.b_other
         assert b_other is not None

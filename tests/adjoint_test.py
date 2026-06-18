@@ -140,9 +140,7 @@ def test_rejected_steps_continue_at_same_place():
     step_method = StubStepMethod(y, Status.SUCCESS.value)
     step_method.step = Mock(side_effect=step_method.step)
     accept = Mock(side_effect=[True, [True, False], [True, False], True, True])
-    step_size_controller = StubStepSizeController(
-        0.1, 0.5, accept, Status.SUCCESS.value
-    )
+    step_size_controller = StubStepSizeController(0.1, 0.5, accept, Status.SUCCESS.value)
 
     adjoint = AutoDiffAdjoint(step_method, step_size_controller)
     solution = adjoint.solve(problem)

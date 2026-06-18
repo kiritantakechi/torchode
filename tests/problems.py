@@ -1,7 +1,7 @@
 import torch
 
 from torchode import InitialValueProblem, ODETerm
-from torchode.typing import *
+from torchode.typing import DataTensor, TimeTensor
 
 
 def make_time_tensor(t, dims):
@@ -42,9 +42,7 @@ def sine_solution(t: TimeTensor, *args):
 
 
 def sine_dynamics(t: TimeTensor, y: DataTensor):
-    return (2 * y[:, 0] / t + t**4 * torch.sin(2 * t) - t**2 + 4 * t**3)[
-        ..., None
-    ]
+    return (2 * y[:, 0] / t + t**4 * torch.sin(2 * t) - t**2 + 4 * t**3)[..., None]
 
 
 KNOWN_SOLUTIONS = {"sine": (sine_solution, sine_dynamics)}
