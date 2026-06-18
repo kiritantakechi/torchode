@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codes returned in `Solution.status`.
 - Switched the development, test and documentation dependencies to PEP 735
   dependency groups and added a `uv.lock` lock file.
+- Reduced the CPU-GPU synchronizations in the solver loop by resolving the
+  evaluation indices directly instead of an extra `to_be_evaluated.any()` check.
+- De-duplicated the shared adaptive step-size logic onto the
+  `AdaptiveStepSizeController` base class, which `IntegralController` and
+  `PIDController` now inherit, so the two controllers can no longer drift apart.
 
 ### Removed
 

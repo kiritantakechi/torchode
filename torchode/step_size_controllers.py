@@ -189,6 +189,13 @@ def max_norm(y: DataTensor) -> NormTensor:
 
 
 class AdaptiveStepSizeController[ControllerState](StepSizeController[ControllerState]):
+    """Base class for controllers that adapt the step size from a local error estimate.
+
+    Subclasses provide the state-specific `initial_state`, `update_state`, `dt_factor`
+    and `merge_states`. The shared stepping machinery (`init`, `adapt_step_size` and the
+    initial step size selection) lives here so that it cannot drift between controllers.
+    """
+
     def initial_state(
         self,
         method_order: int,
@@ -211,122 +218,6 @@ class AdaptiveStepSizeController[ControllerState](StepSizeController[ControllerS
     def dt_factor(self, state: ControllerState, error_ratio: NormTensor):
         raise NotImplementedError()
 
-
-class IntegralState:
-    def __init__(
-        self,
-        method_order: int,
-        almost_zero: torch.Tensor,
-        dt_min: torch.Tensor | None = None,
-        dt_max: torch.Tensor | None = None,
-    ):
-        self.method_order = method_order
-        self.almost_zero = almost_zero
-        self.dt_min = dt_min
-        self.dt_max = dt_max
-
-    def update_error_ratios(
-        self, prev_error_ratio: NormTensor, prev_prev_error_ratio: NormTensor
-    ):
-        return self
-
-    def __repr__(self):
-        return (
-            f"IState(method_order={self.method_order}, "
-            f"almost_zero={self.almost_zero}, "
-            f"dt_min={self.dt_min}), "
-            f"dt_max={self.dt_max})"
-        )
-
-    @staticmethod
-    def default(
-        *,
-        method_order: int,
-        batch_size: int,
-        dtype: torch.dtype,
-        device: torch.device | None,
-        dt_min: torch.Tensor | None,
-        dt_max: torch.Tensor | None,
-    ):
-        # Pre-allocate a fixed, very small number as a lower bound for the error ratio
-        if dtype == torch.float16:
-            float_min = 1e-5
-        else:
-            float_min = 1e-38
-        almost_zero = torch.tensor(float_min, dtype=dtype, device=device)
-        return IntegralState(method_order, almost_zero, dt_min, dt_max)
-
-
-class IntegralController(nn.Module):
-    """The simplest controller that scales the step size proportional to the error."""
-
-    def __init__(
-        self,
-        atol: float,
-        rtol: float,
-        *,
-        term: ODETerm | None = None,
-        norm: Callable[[DataTensor], NormTensor] = rms_norm,
-        dt_min: float | None = None,
-        dt_max: float | None = None,
-        safety: float = 0.9,
-        factor_min: float = 0.2,
-        factor_max: float = 10.0,
-    ):
-        super().__init__()
-
-        self.register_buffer("atol", torch.tensor(atol))
-        self.register_buffer("rtol", torch.tensor(rtol))
-        self.term = term
-        self.norm = norm
-        self.dt_min = dt_min
-        self.dt_max = dt_max
-
-        self.safety = safety
-        self.factor_min = factor_min
-        self.factor_max = factor_max
-
-    def dt_factor(self, state: IntegralState, error_ratio: NormTensor):
-        """Compute the growth factor of the timestep."""
-
-        k_I = 1.0 / state.method_order
-        factor = self.safety * error_ratio ** (-k_I)
-        return torch.clamp(factor, min=self.factor_min, max=self.factor_max)
-
-    def initial_state(
-        self,
-        method_order: int,
-        problem: InitialValueProblem,
-        dt_min: TimeTensor | None,
-        dt_max: TimeTensor | None,
-    ) -> IntegralState:
-        return IntegralState.default(
-            method_order=method_order,
-            batch_size=problem.batch_size,
-            dtype=problem.data_dtype,
-            device=problem.device,
-            dt_min=dt_min,
-            dt_max=dt_max,
-        )
-
-    def merge_states(
-        self, running: AcceptTensor, current: IntegralState, previous: IntegralState
-    ) -> IntegralState:
-        return current
-
-    def update_state(
-        self,
-        state: IntegralState,
-        y0: DataTensor,
-        dt: TimeTensor,
-        error_ratio: NormTensor | None,
-        accept: AcceptTensor | None,
-    ) -> IntegralState:
-        return state
-
-    # The following methods are shared by IntegralController and PIDController and
-    # could be hoisted onto a common AdaptiveStepSizeController base class.
-
     def init(
         self,
         term: ODETerm | None,
@@ -336,7 +227,7 @@ class IntegralController(nn.Module):
         *,
         stats: dict[str, Any],
         args: Any,
-    ) -> tuple[TimeTensor, IntegralState, DataTensor | None]:
+    ) -> tuple[TimeTensor, ControllerState, DataTensor | None]:
         if dt0 is None:
             dt_max = (problem.t_end - problem.t_start).abs()
             dt0, f0 = self._select_initial_step(
@@ -365,9 +256,9 @@ class IntegralController(nn.Module):
         dt: TimeTensor,
         y0: DataTensor,
         step_result: StepResult,
-        state: IntegralState,
+        state: ControllerState,
         stats: dict[str, Any],
-    ) -> tuple[AcceptTensor, TimeTensor, IntegralState, StatusTensor | None]:
+    ) -> tuple[AcceptTensor, TimeTensor, ControllerState, StatusTensor | None]:
         y1, error_estimate = step_result.y, step_result.error_estimate
 
         if error_estimate is None:
@@ -480,6 +371,119 @@ class IntegralController(nn.Module):
         return (direction * torch.minimum(100 * dt0, dt1)).to(dtype=t0.dtype), f0
 
 
+class IntegralState:
+    def __init__(
+        self,
+        method_order: int,
+        almost_zero: torch.Tensor,
+        dt_min: torch.Tensor | None = None,
+        dt_max: torch.Tensor | None = None,
+    ):
+        self.method_order = method_order
+        self.almost_zero = almost_zero
+        self.dt_min = dt_min
+        self.dt_max = dt_max
+
+    def update_error_ratios(
+        self, prev_error_ratio: NormTensor, prev_prev_error_ratio: NormTensor
+    ):
+        return self
+
+    def __repr__(self):
+        return (
+            f"IState(method_order={self.method_order}, "
+            f"almost_zero={self.almost_zero}, "
+            f"dt_min={self.dt_min}), "
+            f"dt_max={self.dt_max})"
+        )
+
+    @staticmethod
+    def default(
+        *,
+        method_order: int,
+        batch_size: int,
+        dtype: torch.dtype,
+        device: torch.device | None,
+        dt_min: torch.Tensor | None,
+        dt_max: torch.Tensor | None,
+    ):
+        # Pre-allocate a fixed, very small number as a lower bound for the error ratio
+        if dtype == torch.float16:
+            float_min = 1e-5
+        else:
+            float_min = 1e-38
+        almost_zero = torch.tensor(float_min, dtype=dtype, device=device)
+        return IntegralState(method_order, almost_zero, dt_min, dt_max)
+
+
+class IntegralController(AdaptiveStepSizeController[IntegralState]):
+    """The simplest controller that scales the step size proportional to the error."""
+
+    def __init__(
+        self,
+        atol: float,
+        rtol: float,
+        *,
+        term: ODETerm | None = None,
+        norm: Callable[[DataTensor], NormTensor] = rms_norm,
+        dt_min: float | None = None,
+        dt_max: float | None = None,
+        safety: float = 0.9,
+        factor_min: float = 0.2,
+        factor_max: float = 10.0,
+    ):
+        super().__init__()
+
+        self.register_buffer("atol", torch.tensor(atol))
+        self.register_buffer("rtol", torch.tensor(rtol))
+        self.term = term
+        self.norm = norm
+        self.dt_min = dt_min
+        self.dt_max = dt_max
+
+        self.safety = safety
+        self.factor_min = factor_min
+        self.factor_max = factor_max
+
+    def dt_factor(self, state: IntegralState, error_ratio: NormTensor):
+        """Compute the growth factor of the timestep."""
+
+        k_I = 1.0 / state.method_order
+        factor = self.safety * error_ratio ** (-k_I)
+        return torch.clamp(factor, min=self.factor_min, max=self.factor_max)
+
+    def initial_state(
+        self,
+        method_order: int,
+        problem: InitialValueProblem,
+        dt_min: TimeTensor | None,
+        dt_max: TimeTensor | None,
+    ) -> IntegralState:
+        return IntegralState.default(
+            method_order=method_order,
+            batch_size=problem.batch_size,
+            dtype=problem.data_dtype,
+            device=problem.device,
+            dt_min=dt_min,
+            dt_max=dt_max,
+        )
+
+    def merge_states(
+        self, running: AcceptTensor, current: IntegralState, previous: IntegralState
+    ) -> IntegralState:
+        return current
+
+    def update_state(
+        self,
+        state: IntegralState,
+        y0: DataTensor,
+        dt: TimeTensor,
+        error_ratio: NormTensor | None,
+        accept: AcceptTensor | None,
+    ) -> IntegralState:
+        return state
+
+
 class PIDState:
     def __init__(
         self,
@@ -541,7 +545,7 @@ class PIDState:
         )
 
 
-class PIDController(nn.Module):
+class PIDController(AdaptiveStepSizeController[PIDState]):
     """A PID step size controller.
 
     The formula for the dt scaling factor with PID control is taken from [1], Equation
@@ -656,158 +660,3 @@ class PIDController(nn.Module):
                     accept, state.prev_error_ratio, state.prev_prev_error_ratio
                 ),
             )
-
-    # The following methods are shared by IntegralController and PIDController and
-    # could be hoisted onto a common AdaptiveStepSizeController base class.
-
-    def init(
-        self,
-        term: ODETerm | None,
-        problem: InitialValueProblem,
-        method_order: int,
-        dt0: TimeTensor | None,
-        *,
-        stats: dict[str, Any],
-        args: Any,
-    ) -> tuple[TimeTensor, PIDState, DataTensor | None]:
-        if dt0 is None:
-            dt_max = (problem.t_end - problem.t_start).abs()
-            dt0, f0 = self._select_initial_step(
-                term,
-                problem.t_start,
-                problem.y0,
-                problem.time_direction,
-                dt_max,
-                method_order,
-                stats,
-                args,
-            )
-        else:
-            f0 = None
-        dt_min = self.dt_min
-        if dt_min is not None:
-            dt_min = torch.tensor(dt_min, dtype=problem.time_dtype, device=problem.device)
-        dt_max = self.dt_max
-        if dt_max is not None:
-            dt_max = torch.tensor(dt_max, dtype=problem.time_dtype, device=problem.device)
-        return dt0, self.initial_state(method_order, problem, dt_min, dt_max), f0
-
-    def adapt_step_size(
-        self,
-        t0: TimeTensor,
-        dt: TimeTensor,
-        y0: DataTensor,
-        step_result: StepResult,
-        state: PIDState,
-        stats: dict[str, Any],
-    ) -> tuple[AcceptTensor, TimeTensor, PIDState, StatusTensor | None]:
-        y1, error_estimate = step_result.y, step_result.error_estimate
-
-        if error_estimate is None:
-            # If the stepping method could not provide an error estimate, we interpret
-            # this as an error estimate that gets the step accepted without changing the
-            # step size, i.e. as an error ratio of 1 (disregarding the safety factor).
-            return (
-                torch.ones_like(dt, dtype=torch.bool),
-                dt,
-                self.update_state(state, y0, dt, None, None),
-                None,
-            )
-
-        # Compute error ratio and decide on step acceptance
-        error_bounds = torch.add(
-            self.atol, torch.maximum(y0.abs(), y1.abs()), alpha=self.rtol
-        )
-        error = error_estimate.abs()
-        # We lower-bound the error ratio by some small number to avoid division by 0 in
-        # `dt_factor`.
-        error_ratio = torch.maximum(self.norm(error / error_bounds), state.almost_zero)
-        accept = error_ratio < 1.0
-
-        # Adapt the step size
-        dt_next = dt * self.dt_factor(state, error_ratio).to(dtype=dt.dtype)
-
-        # Check for infinities and NaN
-        status = torch.where(
-            torch.isfinite(error_ratio),
-            status_codes.SUCCESS,
-            status_codes.INFINITE_NORM,
-        )
-
-        # Enforce the minimum and maximum step size
-        dt_min = state.dt_min
-        dt_max = state.dt_max
-        if dt_min is not None or dt_max is not None:
-            abs_dt_next = dt_next.abs()
-            dt_next = torch.sign(dt_next) * torch.clamp(abs_dt_next, dt_min, dt_max)
-            if dt_min is not None:
-                status = torch.where(
-                    abs_dt_next < dt_min, status_codes.REACHED_DT_MIN, status
-                )
-
-        return (
-            accept,
-            dt_next,
-            self.update_state(state, y0, dt, error_ratio, accept),
-            status,
-        )
-
-    def _select_initial_step(
-        self,
-        term: ODETerm | None,
-        t0: TimeTensor,
-        y0: DataTensor,
-        direction: torch.Tensor,
-        dt_max: TimeTensor,
-        convergence_order: int,
-        stats: dict[str, Any],
-        args: Any,
-    ) -> tuple[TimeTensor, DataTensor]:
-        """Empirically select a good initial step.
-
-        This is an adaptation of the algorithm described in [1]_. We changed it in such a
-        way that the tolerances apply to the norms instead of the components of `y`.
-
-        References
-        ----------
-        .. [1] E. Hairer, S. P. Norsett G. Wanner, "Solving Ordinary Differential
-        Equations I: Nonstiff Problems", Sec. II.4, 2nd edition.
-        """
-
-        if term is None:
-            term = self.term
-        assert term is not None
-
-        norm = self.norm
-        f0 = term.vf(t0, y0, stats, args)
-
-        error_bounds = torch.add(self.atol, torch.abs(y0), alpha=self.rtol)
-        inv_scale = torch.reciprocal(error_bounds)
-
-        d0 = norm(y0 * inv_scale)
-        d1 = norm(f0 * inv_scale)
-
-        small_number = torch.tensor(1e-6, dtype=d0.dtype, device=d0.device)
-        dt0 = torch.where((d0 < 1e-5) | (d1 < 1e-5), small_number, 0.01 * d0 / d1)
-
-        # Ensure that we don't step out of the integration bounds
-        dt0 = torch.minimum(dt0, dt_max.to(dtype=y0.dtype))
-
-        y1 = torch.addcmul(y0, (direction * dt0)[:, None], f0)
-        f1 = term.vf(
-            torch.addcmul(t0, direction.to(dtype=t0.dtype), dt0.to(dtype=t0.dtype)),
-            y1,
-            stats,
-            args,
-        )
-
-        d2 = torch.where(dt0 == 0, torch.inf, norm((f1 - f0) * inv_scale) / dt0)
-
-        maxd1d2 = torch.maximum(d1, d2)
-        dt1 = torch.where(
-            maxd1d2 <= 1e-15,
-            torch.maximum(small_number, dt0 * 1e-3),
-            (0.01 / maxd1d2) ** (1.0 / convergence_order),
-        )
-
-        return (direction * torch.minimum(100 * dt0, dt1)).to(dtype=t0.dtype), f0

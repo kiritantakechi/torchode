@@ -202,10 +202,10 @@ class AutoDiffAdjoint(nn.Module):
             # Evaluate the solution at all evaluation points that have been passed in
             # this step.
             #
-            # This causes a blocking CPU-GPU sync point at to_be_evaluated.any
-            # when t_eval is not None, but deferring this sync doesn't seem to
-            # yield a speedup. A sync is necessary at each evaluation point anyway
-            # since nonzero produces a variable-shape result.
+            # This causes a blocking CPU-GPU sync because `nonzero` produces a
+            # variable-shape result. We resolve the indices first and branch on their
+            # count, which avoids paying for a *second* sync from a separate
+            # `to_be_evaluated.any()` check.
             # See https://github.com/martenlienen/torchode/issues/46
             if t_eval is not None:
                 to_be_evaluated = (
@@ -216,9 +216,9 @@ class AutoDiffAdjoint(nn.Module):
                     )
                     >= 0.0
                 ) & not_yet_evaluated
-                if to_be_evaluated.any():
+                nonzero = to_be_evaluated.nonzero()
+                if nonzero.shape[0] > 0:
                     interpolation = step_method.build_interpolation(interp_data)
-                    nonzero = to_be_evaluated.nonzero()
                     sample_idx, eval_t_idx = nonzero[:, 0], nonzero[:, 1]
                     y_eval[sample_idx, eval_t_idx] = interpolation.evaluate(
                         t_eval[sample_idx, eval_t_idx], sample_idx
